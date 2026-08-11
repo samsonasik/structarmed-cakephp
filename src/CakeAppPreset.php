@@ -5,7 +5,7 @@ namespace Crustum\StructArmed\Cake;
 
 use Boundwize\StructArmed\Architecture;
 use Boundwize\StructArmed\Preset\PresetInterface;
-use Boundwize\StructArmed\Rule\Rules\Class_\ClassNameMustHaveSuffixRule;
+use Boundwize\StructArmed\Rule\RuleInterface;
 use Boundwize\StructArmed\Rule\Rules\Class_\MaxDependencyCountRule;
 use Boundwize\StructArmed\Rule\Rules\Layer\MayNotDependOnRule;
 use Boundwize\StructArmed\Rule\Rules\Method\MaxCyclomaticComplexityRule;
@@ -13,7 +13,8 @@ use Boundwize\StructArmed\Rule\Rules\Method\MaxMethodLengthRule;
 use Boundwize\StructArmed\Rule\Rules\Method\MustHaveReturnTypeRule;
 use Boundwize\StructArmed\Rule\Rules\Usage\MayNotCallFunctionRule;
 use Boundwize\StructArmed\Rule\Rules\Usage\MayNotUseLanguageConstructRule;
-use Boundwize\StructArmed\Rule\Rules\Usage\MayNotUseSuperglobalsRule;
+use Crustum\StructArmed\Cake\Rule\ClassNameSuffixRule;
+use Crustum\StructArmed\Cake\Rule\MayNotUseSuperglobalsRule;
 use function sprintf;
 use function str_replace;
 use function strtolower;
@@ -123,6 +124,9 @@ final readonly class CakeAppPreset implements PresetInterface
      *   and applies its rules against the mapped host layer instead. Use this to
      *   combine the preset with an existing `ruleset()` config that owns the layers,
      *   e.g. `['Controller' => 'Delivery', 'Command' => 'Delivery', 'Table' => 'Model', 'Entity' => 'Model']`.
+     * @param array<string, list<string>> $superglobalAllowlist Map of resolved layer
+     *   name => FQCNs exempt from the no-superglobals rule (dev tooling that seeds
+     *   process environment, e.g. MCP inspector).
      */
     public function __construct(
         private string $namespace = 'App',
@@ -131,6 +135,7 @@ final readonly class CakeAppPreset implements PresetInterface
         private int $controllerMaxDependencies = 5,
         private int $viewMaxComplexity = 3,
         private array $layerMap = [],
+        private array $superglobalAllowlist = [],
     ) {
     }
 
@@ -245,31 +250,31 @@ final readonly class CakeAppPreset implements PresetInterface
     private function applyNaming(Architecture $architecture)
     {
         if (!isset($this->layerMap['Controller'])) {
-            $architecture->rule(self::CONTROLLER_NAME_MUST_END_WITH_CONTROLLER, new ClassNameMustHaveSuffixRule(layer: $this->resolved('Controller'), suffix: 'Controller'));
+            $architecture->rule(self::CONTROLLER_NAME_MUST_END_WITH_CONTROLLER, new ClassNameSuffixRule(layer: $this->resolved('Controller'), suffix: 'Controller'));
         }
 
         if (!isset($this->layerMap['Table'])) {
-            $architecture->rule(self::TABLE_NAME_MUST_END_WITH_TABLE, new ClassNameMustHaveSuffixRule(layer: $this->resolved('Table'), suffix: 'Table'));
+            $architecture->rule(self::TABLE_NAME_MUST_END_WITH_TABLE, new ClassNameSuffixRule(layer: $this->resolved('Table'), suffix: 'Table'));
         }
 
         if (!isset($this->layerMap['Behavior'])) {
-            $architecture->rule(self::BEHAVIOR_NAME_MUST_END_WITH_BEHAVIOR, new ClassNameMustHaveSuffixRule(layer: $this->resolved('Behavior'), suffix: 'Behavior'));
+            $architecture->rule(self::BEHAVIOR_NAME_MUST_END_WITH_BEHAVIOR, new ClassNameSuffixRule(layer: $this->resolved('Behavior'), suffix: 'Behavior'));
         }
 
         if (!isset($this->layerMap['Component'])) {
-            $architecture->rule(self::COMPONENT_NAME_MUST_END_WITH_COMPONENT, new ClassNameMustHaveSuffixRule(layer: $this->resolved('Component'), suffix: 'Component'));
+            $architecture->rule(self::COMPONENT_NAME_MUST_END_WITH_COMPONENT, new ClassNameSuffixRule(layer: $this->resolved('Component'), suffix: 'Component'));
         }
 
         if (!isset($this->layerMap['Cell'])) {
-            $architecture->rule(self::CELL_NAME_MUST_END_WITH_CELL, new ClassNameMustHaveSuffixRule(layer: $this->resolved('Cell'), suffix: 'Cell'));
+            $architecture->rule(self::CELL_NAME_MUST_END_WITH_CELL, new ClassNameSuffixRule(layer: $this->resolved('Cell'), suffix: 'Cell'));
         }
 
         if (!isset($this->layerMap['Helper'])) {
-            $architecture->rule(self::HELPER_NAME_MUST_END_WITH_HELPER, new ClassNameMustHaveSuffixRule(layer: $this->resolved('Helper'), suffix: 'Helper'));
+            $architecture->rule(self::HELPER_NAME_MUST_END_WITH_HELPER, new ClassNameSuffixRule(layer: $this->resolved('Helper'), suffix: 'Helper'));
         }
 
         if (!isset($this->layerMap['Command'])) {
-            $architecture->rule(self::COMMAND_NAME_MUST_END_WITH_COMMAND, new ClassNameMustHaveSuffixRule(layer: $this->resolved('Command'), suffix: 'Command'));
+            $architecture->rule(self::COMMAND_NAME_MUST_END_WITH_COMMAND, new ClassNameSuffixRule(layer: $this->resolved('Command'), suffix: 'Command'));
         }
 
         return $this;
@@ -289,7 +294,7 @@ final readonly class CakeAppPreset implements PresetInterface
             ->rule(self::CONTROLLER_MAX_COMPLEXITY, new MaxCyclomaticComplexityRule(layer: $layer, maxComplexity: $this->controllerMaxComplexity))
             ->rule(self::CONTROLLER_MAX_METHOD_LENGTH, new MaxMethodLengthRule(layer: $layer, maxLines: $this->controllerMaxMethodLength))
             ->rule(self::CONTROLLER_MAX_DEPENDENCIES, new MaxDependencyCountRule(layer: $layer, maxCount: $this->controllerMaxDependencies))
-            ->rule(self::CONTROLLER_NO_SUPERGLOBALS, new MayNotUseSuperglobalsRule(layer: $layer))
+            ->rule(self::CONTROLLER_NO_SUPERGLOBALS, $this->superglobalsRule($layer))
             ->rule(self::CONTROLLER_MUST_HAVE_RETURN_TYPES, new MustHaveReturnTypeRule(layer: $layer));
 
         return $this;
@@ -308,9 +313,9 @@ final readonly class CakeAppPreset implements PresetInterface
         $behavior = $this->resolved('Behavior');
 
         $architecture
-            ->rule(self::TABLE_NO_SUPERGLOBALS, new MayNotUseSuperglobalsRule(layer: $table))
+            ->rule(self::TABLE_NO_SUPERGLOBALS, $this->superglobalsRule($table))
             ->rule(self::TABLE_MUST_HAVE_RETURN_TYPES, new MustHaveReturnTypeRule(layer: $table))
-            ->rule(self::ENTITY_NO_SUPERGLOBALS, new MayNotUseSuperglobalsRule(layer: $entity))
+            ->rule(self::ENTITY_NO_SUPERGLOBALS, $this->superglobalsRule($entity))
             ->rule(self::ENTITY_MUST_HAVE_RETURN_TYPES, new MustHaveReturnTypeRule(layer: $entity))
             ->rule(self::BEHAVIOR_MUST_HAVE_RETURN_TYPES, new MustHaveReturnTypeRule(layer: $behavior));
 
@@ -331,10 +336,10 @@ final readonly class CakeAppPreset implements PresetInterface
 
         $architecture
             ->rule(self::VIEW_MAX_COMPLEXITY, new MaxCyclomaticComplexityRule(layer: $view, maxComplexity: $this->viewMaxComplexity))
-            ->rule(self::VIEW_NO_SUPERGLOBALS, new MayNotUseSuperglobalsRule(layer: $view))
+            ->rule(self::VIEW_NO_SUPERGLOBALS, $this->superglobalsRule($view))
             ->rule(self::CELL_MAX_COMPLEXITY, new MaxCyclomaticComplexityRule(layer: $cell, maxComplexity: $this->viewMaxComplexity))
             ->rule(self::CELL_MUST_HAVE_RETURN_TYPES, new MustHaveReturnTypeRule(layer: $cell))
-            ->rule(self::HELPER_NO_SUPERGLOBALS, new MayNotUseSuperglobalsRule(layer: $helper))
+            ->rule(self::HELPER_NO_SUPERGLOBALS, $this->superglobalsRule($helper))
             ->rule(self::HELPER_MUST_HAVE_RETURN_TYPES, new MustHaveReturnTypeRule(layer: $helper));
 
         return $this;
@@ -352,7 +357,7 @@ final readonly class CakeAppPreset implements PresetInterface
 
         $architecture
             ->rule(self::COMMAND_MAX_COMPLEXITY, new MaxCyclomaticComplexityRule(layer: $layer, maxComplexity: $this->controllerMaxComplexity))
-            ->rule(self::COMMAND_NO_SUPERGLOBALS, new MayNotUseSuperglobalsRule(layer: $layer))
+            ->rule(self::COMMAND_NO_SUPERGLOBALS, $this->superglobalsRule($layer))
             ->rule(self::COMMAND_MUST_HAVE_RETURN_TYPES, new MustHaveReturnTypeRule(layer: $layer));
 
         return $this;
@@ -385,6 +390,20 @@ final readonly class CakeAppPreset implements PresetInterface
         }
 
         return $this;
+    }
+
+    /**
+     * Build the no-superglobals rule for a resolved layer, honoring the allowlist.
+     *
+     * @param string $layer Resolved host layer name
+     * @return \Boundwize\StructArmed\Rule\RuleInterface
+     */
+    private function superglobalsRule(string $layer): RuleInterface
+    {
+        return new MayNotUseSuperglobalsRule(
+            layer: $layer,
+            allowlist: $this->superglobalAllowlist[$layer] ?? [],
+        );
     }
 
     /**
